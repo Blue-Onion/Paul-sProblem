@@ -1,0 +1,130 @@
+openapi: 3.1.0
+info:
+  title: Attendance Timetable Extraction API
+  version: 1.0.0
+  description: Stateless document extraction for the Android attendance tracker. Semester data, attendance, calendar, settings and backups are managed on the device.
+paths:
+  /healthz:
+    get:
+      operationId: health
+      summary: Check whether the HTTP service is responding
+      responses:
+        '200':
+          description: HTTP service is alive. This does not probe document processors.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, const: ok}
+  /v1/timetables/extract:
+    post:
+      operationId: extractTimetable
+      summary: Extract draft weekly class entries from one timetable document
+      description: |
+        Accepts PDF, PNG, JPEG, XLSX, XLS and UTF-8 CSV. Maximum file size is
+        10 MiB (10,485,760 bytes), and maximum request size is 11 MiB.
+        A usable document with no recognized classes returns an empty list
+        and a warning. The user reviews the result before saving it locally.
+        No login, durable upload, or asynchronous job is required.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  description: A single nonempty document. Its content must match its filename extension.
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Extracted draft with zero or more entries and warnings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Extraction'
+        '400':
+          $ref: '#/components/responses/Error'
+          description: Missing or empty file, malformed multipart, duplicate file parts or unexpected fields
+        '413':
+          $ref: '#/components/responses/Error'
+          description: Request or file byte limit exceeded
+        '415':
+          $ref: '#/components/responses/Error'
+          description: Unsupported request media type or file format, or content incompatible with the filename extension
+        '422':
+          $ref: '#/components/responses/Error'
+          description: Recognized format cannot be processed because the document is corrupt, encrypted, or exceeds a document complexity limit
+        '500':
+          $ref: '#/components/responses/Error'
+          description: Unexpected extraction failure
+        '503':
+          $ref: '#/components/responses/Error'
+          description: Required processor unavailable or extraction capacity reached
+        '504':
+          $ref: '#/components/responses/Error'
+          description: Extraction deadline exceeded
+components:
+  responses:
+    Error:
+      description: Request or processing error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Extraction:
+      type: object
+      required: [entries, warnings]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/Entry'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/Warning'
+    Entry:
+      type: object
+      required: [subject, weekday, startTime, endTime, kind]
+      properties:
+        subject: {type: string, minLength: 1, examples: [Applied Physics]}
+        weekday: {type: integer, minimum: 1, maximum: 7, description: 'ISO weekday, Monday = 1 and Sunday = 7'}
+        startTime: {$ref: '#/components/schemas/LocalTime'}
+        endTime:
+          allOf:
+            - $ref: '#/components/schemas/LocalTime'
+          description: Same-day local time and strictly later than startTime
+        room: {type: string, minLength: 1, examples: [Lab 204]}
+        kind: {type: string, enum: [lecture, practical, unknown]}
+    LocalTime:
+      type: string
+      pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+      examples: ['09:30']
+    Warning:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string, enum: [NO_ENTRIES, AMBIGUOUS_ENTRY, DUPLICATE_ENTRY]}
+        message: {type: string, minLength: 1}
+        location:
+          type: string
+          description: Source location when available
+          examples: ['Sheet 1, row 8', 'Page 2']
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [INVALID_UPLOAD, UPLOAD_TOO_LARGE, UNSUPPORTED_MEDIA_TYPE, UNPROCESSABLE_DOCUMENT, INTERNAL_ERROR, PROCESSOR_UNAVAILABLE, SERVICE_BUSY, EXTRACTION_TIMEOUT]
+        message:
+          type: string
+          minLength: 1
+          description: Human-readable error without raw processor output or server paths
